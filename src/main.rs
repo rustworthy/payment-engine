@@ -19,7 +19,7 @@ fn main() {
     };
 
     let reader = std::io::BufReader::new(file);
-    let writer = std::io::stdout();
+    let writer = std::io::BufWriter::new(std::io::stdout());
     if let Err(err) = payment_engine::process(reader, writer) {
         println!("Processing error: {}", err);
         std::process::exit(1);

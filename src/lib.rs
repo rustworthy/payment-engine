@@ -2,6 +2,7 @@
 extern crate serde;
 
 use std::{
+    collections::HashMap,
     error::Error,
     io::{Read, Write},
 };
@@ -12,11 +13,17 @@ use std::{
 // if we want to adjust it
 const DECIMALS_PRECISION: u32 = 4;
 
+type ClientID = u16;
+type TxnID = u32;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum TxnKind {
     Deposit,
     Withdrawal,
+    Dispute,
+    Resolve,
+    ChargeBack,
 }
 
 #[allow(unused)]
@@ -26,21 +33,21 @@ struct TxnRecord {
     kind: TxnKind,
 
     /// Client's _unique_ identifier.
-    client: u16,
+    client: ClientID,
 
     /// Transaction's _unique_ identifier.
-    tx: u32,
+    tx: TxnID,
 
     /// Transaction ammount.
     #[serde(deserialize_with = "utils::deser_amount")]
+    // TODO: consider a new type
     amount: f64,
 }
 
-#[allow(unused)]
 #[derive(Debug, Serialize)]
-pub struct AccountState {
+struct Account {
     /// Client's _unique_ identifier.
-    client: u16,
+    client: ClientID,
 
     /// Available funds.
     ///
@@ -52,13 +59,46 @@ pub struct AccountState {
 
     /// Total funds.
     ///
-    /// Calcualted as [`AccountState::available`] plus [`AccountState::held`]
+    /// Calcualted as [`Account::available`] plus [`Account::held`]
     total: f64,
 
     /// Whether this account is locked.
     ///
     /// An account gets locked when a charge back is taking place.
     locked: bool,
+}
+
+impl Account {
+    fn new(client: ClientID) -> Self {
+        Account {
+            client,
+            available: 0.0,
+            held: 0.0,
+            total: 0.0,
+            locked: false,
+        }
+    }
+
+    /// Credit the client's account.
+    fn deposit(&mut self, amount: f64) {
+        self.available += amount;
+        self.total += amount;
+    }
+
+    /// Debit the client's account.
+    ///
+    /// If they do not have sufficient available funds ([`Account::available`]),
+    /// the operation will return `false` leaving the account intact, otherwise
+    /// their [`Account::available`] and [`Account::total`] will be reduced by
+    /// the provided `amount`.
+    fn withdraw(&mut self, amount: f64) -> bool {
+        if self.available < amount {
+            return false;
+        }
+        self.available -= amount;
+        self.total -= amount;
+        true
+    }
 }
 
 /// Process the records contained in the `reader` in CSV format.
@@ -77,21 +117,44 @@ where
     R: Read,
     W: Write,
 {
-    let mut rdr = csv::ReaderBuilder::new()
+    let mut accounts: HashMap<ClientID, Account> = HashMap::new();
+    for result in csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
-        .from_reader(reader);
-    for result in rdr.deserialize() {
+        .from_reader(reader)
+        .deserialize()
+    {
         let record: TxnRecord = result?;
-        println!("{:?}", record);
+        match record.kind {
+            TxnKind::Deposit => {
+                if let Some(account) = accounts.get_mut(&record.client) {
+                    account.deposit(record.amount);
+                } else {
+                    let mut account = Account::new(record.client);
+                    account.deposit(record.amount);
+                    accounts.insert(record.client, account);
+                }
+            }
+            TxnKind::Withdrawal => {
+                if let Some(account) = accounts.get_mut(&record.client) {
+                    // this operation is fallible, but we are currently
+                    // just moving on; we can consider emitting a warn event
+                    // or collect such cases and reporting back to the caller
+                    let _ok = account.withdraw(record.amount);
+                } else {
+                    // the account was not there in the first place, and so we
+                    // create one and continue; there is probably no sense in
+                    // trying to withdraw from the newly created account (unless
+                    // we withdraw `0.0`?)
+                    accounts.insert(record.client, Account::new(record.client));
+                }
+            }
+            _ => unimplemented!(),
+        }
     }
     let mut wrt = csv::Writer::from_writer(writer);
-    wrt.serialize(AccountState {
-        client: 1,
-        available: utils::to_precision(80.299911, DECIMALS_PRECISION),
-        held: utils::to_precision(20.00199, DECIMALS_PRECISION),
-        total: 100.50,
-        locked: false,
-    })?;
+    for account in accounts.values() {
+        wrt.serialize(account)?;
+    }
     wrt.flush()?;
     Ok(())
 }
