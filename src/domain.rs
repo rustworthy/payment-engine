@@ -42,6 +42,14 @@ pub enum TxnRecordKind {
     Withdrawal,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub enum TxnState {
+    #[default]
+    Undisputed,
+    Disputed,
+    Reversed,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct TxnRecord {
     #[serde(rename = "type")]
@@ -59,7 +67,7 @@ pub struct TxnRecord {
 
     /// Wether this transaction is under dispute.
     #[serde(skip)]
-    pub disputed: bool,
+    pub state: TxnState,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +189,9 @@ impl Account {
     pub fn charge_back(&mut self, amount: Amount) {
         self.held -= amount;
         self.total -= amount;
+    }
+
+    pub fn lock(&mut self) {
         self.locked = true;
     }
 }

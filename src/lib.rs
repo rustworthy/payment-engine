@@ -11,6 +11,7 @@ mod domain;
 
 use domain::{
     Account, ClientID, DisputeRecordKind, Record, RecordInner, TxnID, TxnRecord, TxnRecordKind,
+    TxnState,
 };
 
 /// Process the records contained in the `reader` in CSV format.
@@ -29,6 +30,9 @@ where
     R: Read,
     W: Write,
 {
+    // TODO: in case we decide tp use this logic on the server, we will
+    // want to use a concurrent hash map and also make it available either
+    // via the app's state, or globally
     let mut txns: HashMap<TxnID, TxnRecord> = HashMap::new();
     let mut accounts: HashMap<ClientID, Account> = HashMap::new();
 
@@ -43,6 +47,10 @@ where
                 match record.kind {
                     TxnRecordKind::Deposit => {
                         if let Some(account) = accounts.get_mut(&record.client) {
+                            if account.locked {
+                                // we assume they cannot credit a locked account
+                                continue;
+                            }
                             account.deposit(record.amount);
                         } else {
                             let mut account = Account::new(record.client);
@@ -52,7 +60,12 @@ where
                     }
                     TxnRecordKind::Withdrawal => {
                         if let Some(account) = accounts.get_mut(&record.client) {
-                            // this operation is fallible, but we are currently
+                            if account.locked {
+                                // we assume they cannot debit a locked account
+                                // (similar to the credit operation above)
+                                continue;
+                            }
+                            // this operation is "fallible", but we are currently
                             // just moving on; we can consider emitting a warn event
                             // or collect such cases and reporting back to the caller
                             let _ok = account.withdraw(record.amount);
@@ -74,52 +87,52 @@ where
                 let Some(txn) = txns.get_mut(&record.tx) else {
                     // the `DisputeRecord` record is referencing a transaction which we
                     // never encountered before; there is not much we can do about
-                    // it (we can consider emitting a warning), so we just move on
+                    // it (we can consider emitting a warning), so we just move on;
+                    //
+                    // further down this branch, we know by this time that we actually
+                    // processed and stored the referenced transaction, hence we
+                    // can `.expect` it as our invariant
                     continue;
                 };
                 match record.kind {
                     DisputeRecordKind::Dispute => {
-                        if txn.disputed {
-                            // this transaction has already been disputed, and so
-                            // to guarantee idempotency, we simply move on to the
-                            // next record
+                        if txn.state != TxnState::Undisputed {
+                            // this transaction has already been disputed or even
+                            // reversed, and so to guarantee idempotency, we simply
+                            // move on to the next record
                             continue;
                         }
-                        if let Some(account) = accounts.get_mut(&record.client) {
-                            account.hold(txn.amount);
-                        } else {
-                            // the `client` referenced in the `dispute` transaction is
-                            // not in our records, so let's create it and move on;
-                            let account = Account::new(record.client);
-                            // TODO: consider if we should call `dispute` on the newly
-                            // created account, and set txn to disputed
-                            accounts.insert(record.client, account);
-                        };
-                        txn.disputed = true;
+                        let account = accounts
+                            .get_mut(&record.client)
+                            .expect("account to have been created earlier for this client");
+                        account.hold(txn.amount);
+                        txn.state = TxnState::Disputed;
                     }
                     DisputeRecordKind::Resolve => {
-                        if !txn.disputed {
+                        if txn.state != TxnState::Disputed {
+                            // this transaction has never been disputed in the
+                            // first place or has already been reversed, and so
+                            // we are moving on to the next record
                             continue;
                         }
-                        if let Some(account) = accounts.get_mut(&record.client) {
-                            account.resolve(txn.amount);
-                        } else {
-                            let account = Account::new(record.client);
-                            accounts.insert(record.client, account);
-                        };
-                        txn.disputed = false;
+                        let account = accounts
+                            .get_mut(&record.client)
+                            .expect("account to have been created earlier for this client");
+                        account.resolve(txn.amount);
+                        txn.state = TxnState::Undisputed;
                     }
                     DisputeRecordKind::ChargeBack => {
-                        if !txn.disputed {
+                        if txn.state != TxnState::Disputed {
+                            // similar to `DisputeRecordKind::Resolve`, we can
+                            // only act here if the transaction is under dipute
                             continue;
                         }
-                        if let Some(account) = accounts.get_mut(&record.client) {
-                            account.charge_back(txn.amount);
-                        } else {
-                            let account = Account::new(record.client);
-                            accounts.insert(record.client, account);
-                        };
-                        txn.disputed = false;
+                        let account = accounts
+                            .get_mut(&record.client)
+                            .expect("account to have been created earlier for this client");
+                        account.charge_back(txn.amount);
+                        account.lock();
+                        txn.state = TxnState::Reversed;
                     }
                 }
             }
