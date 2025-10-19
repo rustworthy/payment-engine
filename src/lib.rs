@@ -1,7 +1,16 @@
 #[macro_use]
 extern crate serde;
 
-use std::{error::Error, io::Read};
+use std::{
+    error::Error,
+    io::{Read, Write},
+};
+
+// this could be something provided by a command line arg if such a feature
+// is requested, but we in practice this is oftentimes system-wide or well-known
+// parameter and so we hard-code it, which implies that re-build will be needed
+// if we want to adjust it
+const DECIMALS_PRECISION: u32 = 4;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -27,6 +36,31 @@ struct TxnRecord {
     amount: f64,
 }
 
+#[allow(unused)]
+#[derive(Debug, Serialize)]
+pub struct AccountState {
+    /// Client's _unique_ identifier.
+    client: u16,
+
+    /// Available funds.
+    ///
+    /// Total funds available for trading, staking, withdrawal, etc.
+    available: f64,
+
+    /// Total funds held for dispute.
+    held: f64,
+
+    /// Total funds.
+    ///
+    /// Calcualted as [`AccountState::available`] plus [`AccountState::held`]
+    total: f64,
+
+    /// Whether this account is locked.
+    ///
+    /// An account gets locked when a charge back is taking place.
+    locked: bool,
+}
+
 /// Process the records contained in the `reader` in CSV format.
 ///
 /// Note how there is no timestamp field in the `TxnRecord` for us to be able
@@ -34,13 +68,14 @@ struct TxnRecord {
 /// written to whatever we are now reading from (e.g. a file) respecting
 /// the chronological order.
 ///
-/// Whitespaces and decimal precisions (up to four places past the decimal)
-/// are accepted. Internally, whitespaces get trimmed both in headers and in fields.
+/// Whitespaces and decimal precisions are accepted. Internally, Whitespaces
+/// get trimmed both in headers and in fields.
 // TODO: once our trace-bullet implementation is ready, consider intoducing
 // our own enumerated error using `thiserror` and `anyhow`
-pub fn process<B>(reader: B) -> Result<(), Box<dyn Error>>
+pub fn process<R, W>(reader: R, writer: W) -> Result<(), Box<dyn Error>>
 where
-    B: Read,
+    R: Read,
+    W: Write,
 {
     let mut rdr = csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
@@ -49,10 +84,20 @@ where
         let record: TxnRecord = result?;
         println!("{:?}", record);
     }
+    let mut wrt = csv::Writer::from_writer(writer);
+    wrt.serialize(AccountState {
+        client: 1,
+        available: utils::to_precision(80.299911, DECIMALS_PRECISION),
+        held: utils::to_precision(20.00199, DECIMALS_PRECISION),
+        total: 100.50,
+        locked: false,
+    })?;
+    wrt.flush()?;
     Ok(())
 }
 
 mod utils {
+    use crate::DECIMALS_PRECISION;
     use serde::Deserialize;
     use serde::Deserializer;
 
@@ -65,7 +110,12 @@ mod utils {
         D: Deserializer<'de>,
     {
         let amount = f64::deserialize(value)?;
-        let amount = (amount * 10u32.pow(4) as f64).floor() / 10u32.pow(4) as f64;
-        Ok(amount)
+        Ok(to_precision(amount, DECIMALS_PRECISION))
+    }
+
+    // TODO: consider adding a trait and  auto-imlement it for floats:
+    // will probably be more idiomatic, but on the other hand less explicit
+    pub(crate) fn to_precision(value: f64, precesion: u32) -> f64 {
+        (value * 10u32.pow(precesion) as f64).floor() / 10u32.pow(precesion) as f64
     }
 }
