@@ -38,6 +38,7 @@ where
 
     for result in csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
+        .flexible(true)
         .from_reader(reader)
         .deserialize()
     {
@@ -144,4 +145,172 @@ where
     }
     wrt.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::process;
+
+    #[test]
+    fn handles_malformed_input() {
+        // let's check we are not panicking on some malformed inputs
+        let cases = [
+            (
+                "\
+                    wrong,      column,  names, provided\n\
+                    deposit,    1,       1,     5.9999\n\
+                ",
+                "wrong column names",
+            ),
+            (
+                "\
+                    type,      client,  tx,     amount\n\
+                    blocking,  1,       1,      5.9999\n\
+                ",
+                "wrong variant for record type",
+            ),
+            (
+                "\
+                    type,      client,  tx,     amount\n\
+                    deposit,   1.0,     1,      5.9999\n\
+                ",
+                "wrong data type for client",
+            ),
+            (
+                "\
+                    type,      client,  tx,     amount\n\
+                    deposit,   1,       1.0,    5.9999\n\
+                ",
+                "wrong data type for tx",
+            ),
+        ];
+        for (case, msg) in cases {
+            let writer = Vec::new();
+            let result = process(case.as_bytes(), writer);
+            assert!(result.is_err(), "{msg}");
+        }
+    }
+
+    #[test]
+    fn handles_emptiness() {
+        let cases = [
+            ("", "empty reader"),
+            (
+                "type, client, tx, amount\n",
+                "header is valid, but no other rows",
+            ),
+        ];
+        for (case, msg) in cases {
+            let mut writer = Vec::new();
+            let result = process(case.as_bytes(), &mut writer);
+            assert!(result.is_ok(), "{msg}");
+            assert!(
+                csv::Reader::from_reader(writer.as_slice())
+                    .records()
+                    .collect::<Vec<_>>()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn handles_decimals_precision() {
+        let cases = [
+            (
+                "\
+                    type,      client,  tx,     amount\n\
+                    deposit,   1,       1,      5\n\
+                ",
+                "amount w/o decimal point",
+            ),
+            (
+                "\
+                    type,      client,  tx,     amount\n\
+                    deposit,   1,       1,      5.0\n\
+                ",
+                "amount with one place after point",
+            ),
+            (
+                "\
+                    type,      client,  tx,     amount\n\
+                    deposit,   1,       1,      5.0000999\n\
+                ",
+                "amount with more than four places after point",
+            ),
+        ];
+        for (case, msg) in cases {
+            let mut writer = Vec::new();
+            let result = process(case.as_bytes(), &mut writer);
+            assert!(result.is_ok());
+            assert_eq!(
+                String::from_utf8(writer).unwrap(),
+                "client,available,held,total,locked\n1,5.0,0.0,5.0,false\n",
+                "{msg}"
+            )
+        }
+    }
+
+    #[test]
+    fn handler_empty_amount() {
+        let cases = [
+            (
+                "\
+                    type,      client,  tx,     amount\n\
+                    dispute,   1,       1,\n\
+                ",
+                "amount field is empty but preceeded by comma",
+            ),
+            // this case is also considered fine, since we are just ingoring
+            // the amount field for dipute resolution operations
+            (
+                "\
+                    type,         client,  tx,     amount\n\
+                    chargeback,   1,       1,      whatever\n\
+                ",
+                "amount valid is not valid type for amount",
+            ),
+        ];
+        for (case, msg) in cases {
+            let mut writer = Vec::new();
+            let result = process(case.as_bytes(), &mut writer);
+            assert!(result.is_ok(), "{msg}");
+            // those records alone do not much: we actually need some
+            // debit and credit transactions to happen before, i.e. to have
+            // something to dispute about
+            assert!(writer.is_empty(), "{msg}");
+        }
+
+        let cases = [
+            // amount is not required for dispute resolution operations, but formatting
+            // should still be valid
+            (
+                "\
+                    type,      client,  tx,     amount\n\
+                    resolve,   1,       1\n\
+                ",
+                "amount field is empty and _not_ preceeded by comma",
+            ),
+            // amout is a required field for deposits ...
+            (
+                "\
+                    type,      client,  tx,     amount\n\
+                    deposit,   1,       1,\n\
+                ",
+                "amount not provided for deposit",
+            ),
+            // ... as well as for withdrawals
+            (
+                "\
+                    type,      client,  tx,     amount\n\
+                    withdrawal,   1,       1,\n\
+                ",
+                "amount not provided for withdrawal",
+            ),
+        ];
+        for (case, msg) in cases {
+            let writer = Vec::new();
+            let result = process(case.as_bytes(), writer);
+            assert!(result.is_err(), "{msg}");
+        }
+    }
 }

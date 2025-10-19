@@ -119,6 +119,7 @@ pub struct Record {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 pub struct Account {
     /// Client's _unique_ identifier.
     pub client: ClientID,
