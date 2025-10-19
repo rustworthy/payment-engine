@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     error::Error,
     io::{Read, Write},
+    ops::{Add, AddAssign, Sub, SubAssign},
 };
 
 // this could be something provided by a command line arg if such a feature
@@ -26,7 +27,32 @@ enum TxnKind {
     ChargeBack,
 }
 
-#[allow(unused)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, PartialOrd)]
+struct Amount(#[serde(deserialize_with = "utils::deser_amount")] f64);
+
+impl Add for Amount {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+impl AddAssign for Amount {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 = self.0 + rhs.0;
+    }
+}
+impl Sub for Amount {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0 - rhs.0)
+    }
+}
+impl SubAssign for Amount {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 = self.0 - rhs.0;
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct TxnRecord {
     #[serde(rename = "type")]
@@ -36,12 +62,11 @@ struct TxnRecord {
     client: ClientID,
 
     /// Transaction's _unique_ identifier.
+    #[allow(unused)]
     tx: TxnID,
 
     /// Transaction ammount.
-    #[serde(deserialize_with = "utils::deser_amount")]
-    // TODO: consider a new type
-    amount: f64,
+    amount: Amount,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,15 +77,15 @@ struct Account {
     /// Available funds.
     ///
     /// Total funds available for trading, staking, withdrawal, etc.
-    available: f64,
+    available: Amount,
 
     /// Total funds held for dispute.
-    held: f64,
+    held: Amount,
 
     /// Total funds.
     ///
     /// Calcualted as [`Account::available`] plus [`Account::held`]
-    total: f64,
+    total: Amount,
 
     /// Whether this account is locked.
     ///
@@ -72,15 +97,15 @@ impl Account {
     fn new(client: ClientID) -> Self {
         Account {
             client,
-            available: 0.0,
-            held: 0.0,
-            total: 0.0,
+            available: Amount::default(),
+            held: Amount::default(),
+            total: Amount::default(),
             locked: false,
         }
     }
 
     /// Credit the client's account.
-    fn deposit(&mut self, amount: f64) {
+    fn deposit(&mut self, amount: Amount) {
         self.available += amount;
         self.total += amount;
     }
@@ -91,7 +116,7 @@ impl Account {
     /// the operation will return `false` leaving the account intact, otherwise
     /// their [`Account::available`] and [`Account::total`] will be reduced by
     /// the provided `amount`.
-    fn withdraw(&mut self, amount: f64) -> bool {
+    fn withdraw(&mut self, amount: Amount) -> bool {
         if self.available < amount {
             return false;
         }
