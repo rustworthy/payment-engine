@@ -20,7 +20,7 @@ fn main() {
 
     let reader = std::io::BufReader::new(file);
     if let Err(err) = payment_engine::process(reader) {
-        println!("error running example: {}", err);
+        println!("Processing error: {}", err);
         std::process::exit(1);
     }
 }
