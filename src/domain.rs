@@ -9,16 +9,6 @@ const DECIMALS_PRECISION: u32 = 4;
 pub type ClientID = u16;
 pub type TxnID = u32;
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TxnKind {
-    Deposit,
-    Withdrawal,
-    Dispute,
-    Resolve,
-    ChargeBack,
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, PartialOrd)]
 pub struct Amount(#[serde(deserialize_with = "utils::deser_amount")] f64);
 
@@ -46,9 +36,16 @@ impl SubAssign for Amount {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TxnRecordKind {
+    Deposit,
+    Withdrawal,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TxnRecord {
     #[serde(rename = "type")]
-    pub kind: TxnKind,
+    pub kind: TxnRecordKind,
 
     /// Client's _unique_ identifier.
     pub client: ClientID,
@@ -59,6 +56,58 @@ pub struct TxnRecord {
 
     /// Transaction ammount.
     pub amount: Amount,
+
+    /// Wether this transaction is under dispute.
+    #[serde(skip)]
+    pub disputed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DisputeRecordKind {
+    Dispute,
+    Resolve,
+    ChargeBack,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DisputeRecord {
+    #[serde(rename = "type")]
+    pub kind: DisputeRecordKind,
+
+    /// Client's _unique_ identifier.
+    pub client: ClientID,
+
+    /// Transaction's _unique_ identifier.
+    pub tx: TxnID,
+}
+
+/// Operation record.
+///
+/// An operation can ether be a transaction one (debit or credit), which is
+/// described as [`TxnRecord`], or a dispute resolution one ([`DisputeRecord`]).
+/// The latter does not contain `amount`, it is rather referencing a transaction,
+/// which - in its turn - always holds the amount in question.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum RecordInner {
+    TxnRecord(TxnRecord),
+    DisputeRecord(DisputeRecord),
+}
+
+// an alternative approach would be to keep things flat: make the amount
+// field optional and then just `.expect` the value to be there for deposits
+// and withdrawals; it works but is not idiomatic and also semantically
+// incorrect, and so instead we bifurcate the records into operations that
+// create a transaction and hold the amount in question vs operations that
+// reference such transactions (dispute resolution operations);
+//
+// we need a hack here to make serde crate play nicely with the csv crate, see:
+// https://github.com/BurntSushi/rust-csv/issues/357
+#[derive(Debug, Deserialize)]
+pub struct Record {
+    #[serde(flatten)]
+    pub inner: RecordInner,
 }
 
 #[derive(Debug, Serialize)]
@@ -115,6 +164,24 @@ impl Account {
         self.available -= amount;
         self.total -= amount;
         true
+    }
+
+    pub fn hold(&mut self, amount: Amount) {
+        self.available -= amount;
+        self.held += amount;
+    }
+
+    /// Unblock the previously disputed amount.
+    pub fn resolve(&mut self, amount: Amount) {
+        self.held -= amount;
+        self.available += amount;
+    }
+
+    /// Unblock the previously disputed amount.
+    pub fn charge_back(&mut self, amount: Amount) {
+        self.held -= amount;
+        self.total -= amount;
+        self.locked = true;
     }
 }
 
