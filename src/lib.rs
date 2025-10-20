@@ -21,7 +21,7 @@ use domain::{
 /// written to whatever we are now reading from (e.g. a file) respecting
 /// the chronological order.
 ///
-/// Whitespaces and decimal precisions are accepted. Internally, Whitespaces
+/// Whitespaces and decimal precisions are accepted. Internally, whitespaces
 /// get trimmed both in headers and in fields.
 // TODO: once our trace-bullet implementation is ready, consider intoducing
 // our own enumerated error using `thiserror` and `anyhow`

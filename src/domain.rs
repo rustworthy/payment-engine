@@ -110,13 +110,14 @@ pub enum DisputeRecordKind {
 
 #[derive(Debug, Deserialize)]
 pub struct DisputeRecord {
+    /// Dispite record type.
     #[serde(rename = "type")]
     pub kind: DisputeRecordKind,
 
-    /// Client's _unique_ identifier.
+    /// Client's identifier.
     pub client: ClientID,
 
-    /// Transaction's _unique_ identifier.
+    /// Disputed transaction's identifier.
     pub tx: TxnID,
 }
 
