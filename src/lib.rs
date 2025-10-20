@@ -149,7 +149,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::process;
+    use crate::domain::{Account, Amount};
+    use crate::process;
 
     #[test]
     fn handles_malformed_input() {
@@ -312,5 +313,29 @@ mod tests {
             let result = process(case.as_bytes(), writer);
             assert!(result.is_err(), "{msg}");
         }
+    }
+
+    #[test]
+    fn handles_deposits_and_withdrawals() {
+        let input = [
+            "type,       client,  tx,     amount",
+            "withdrawal, 1,       1,      15000.0001", // account not there (skip)
+            "deposit,    1,       2,      15000",      // account is there and topped up
+            "withdrawal, 1,       3,      15000.0001", // insufficient funds (skip)
+            "deposit,    1,       4,      0.00019",    // now should be sufficient
+            "withdrawal, 1,       5,      15000.0001", // should empty the account
+        ];
+        let mut writer = Vec::new();
+        let result = process(input.join("\n").as_bytes(), &mut writer);
+        assert!(result.is_ok());
+        let accounts = csv::Reader::from_reader(writer.as_slice())
+            .deserialize()
+            .collect::<Result<Vec<Account>, _>>()
+            .unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].total, Amount::try_from_f64(0.).unwrap());
+        assert_eq!(accounts[0].available, Amount::try_from_f64(0.).unwrap());
+        assert_eq!(accounts[0].held, Amount::try_from_f64(0.).unwrap());
+        assert!(!accounts[0].locked);
     }
 }

@@ -26,14 +26,14 @@ impl Amount {
     ///
     /// This conversion is fallible, since we are not allowing to create an
     /// [`Amount`] holding a NaN.
-    fn try_from_f64(value: f64) -> Result<Self, Box<dyn Error>> {
+    pub fn try_from_f64(value: f64) -> Result<Self, Box<dyn Error>> {
         let amount = (value * 10u32.pow(DECIMALS_PRECISION) as f64).trunc();
         Ok(Self {
             inner: amount as i64,
         })
     }
 
-    fn as_f64(&self) -> f64 {
+    pub fn as_f64(&self) -> f64 {
         self.inner as f64 / 10u32.pow(DECIMALS_PRECISION) as f64
     }
 }
