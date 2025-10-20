@@ -1,4 +1,7 @@
-use std::ops::{Add, AddAssign, Sub, SubAssign};
+use std::{
+    error::Error,
+    ops::{Add, AddAssign, Sub, SubAssign},
+};
 
 // this could be something provided by a command line arg if such a feature
 // is requested, but we in practice this is oftentimes system-wide or well-known
@@ -9,29 +12,56 @@ const DECIMALS_PRECISION: u32 = 4;
 pub type ClientID = u16;
 pub type TxnID = u32;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, PartialOrd)]
-pub struct Amount(#[serde(deserialize_with = "utils::deser_amount")] f64);
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd)]
+pub struct Amount {
+    inner: i64,
+}
+
+impl Amount {
+    /// Create new [`Amount`] from an f64 `value`.
+    ///
+    /// Internally, will store the `value` as i64 (counting in up to four
+    /// places past the decimal in the given float), so that 1.53349999 turns
+    /// into 15334.
+    ///
+    /// This conversion is fallible, since we are not allowing to create an
+    /// [`Amount`] holding a NaN.
+    fn try_from_f64(value: f64) -> Result<Self, Box<dyn Error>> {
+        let amount = (value * 10u32.pow(DECIMALS_PRECISION) as f64).trunc();
+        Ok(Self {
+            inner: amount as i64,
+        })
+    }
+
+    fn as_f64(&self) -> f64 {
+        self.inner as f64 / 10u32.pow(DECIMALS_PRECISION) as f64
+    }
+}
 
 impl Add for Amount {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0 + rhs.0)
+        Self {
+            inner: self.inner + rhs.inner,
+        }
     }
 }
 impl AddAssign for Amount {
     fn add_assign(&mut self, rhs: Self) {
-        self.0 = self.0 + rhs.0;
+        self.inner = self.inner + rhs.inner;
     }
 }
 impl Sub for Amount {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
-        Self(self.0 - rhs.0)
+        Self {
+            inner: self.inner - rhs.inner,
+        }
     }
 }
 impl SubAssign for Amount {
     fn sub_assign(&mut self, rhs: Self) {
-        self.0 = self.0 - rhs.0;
+        self.inner = self.inner - rhs.inner;
     }
 }
 
@@ -198,23 +228,28 @@ impl Account {
 }
 
 mod utils {
-    use super::DECIMALS_PRECISION;
-    use serde::Deserialize;
-    use serde::Deserializer;
+    use super::Amount;
+    use serde::de::Error;
+    use serde::{Deserialize, Deserializer};
+    use serde::{Serialize, Serializer};
 
-    // Deserialize transaction amount.
-    //
-    // Internally, will deserialize the `value` as `f64` and adjust it to
-    // four places past the decimal, so that 1.53349999 turns into 1.5334.
-    pub(crate) fn deser_amount<'de, D>(value: D) -> Result<f64, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let amount = f64::deserialize(value)?;
-        Ok(to_precision(amount, DECIMALS_PRECISION))
+    impl<'de> Deserialize<'de> for Amount {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let value: f64 = Deserialize::deserialize(deserializer)?;
+            let amount = Self::try_from_f64(value).map_err(|e| Error::custom(e.to_string()))?;
+            Ok(amount)
+        }
     }
 
-    pub fn to_precision(value: f64, precision: u32) -> f64 {
-        (value * 10u32.pow(precision) as f64).floor() / 10u32.pow(precision) as f64
+    impl Serialize for Amount {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serializer.serialize_f64(self.as_f64())
+        }
     }
 }

@@ -241,7 +241,7 @@ mod tests {
         for (case, msg) in cases {
             let mut writer = Vec::new();
             let result = process(case.as_bytes(), &mut writer);
-            assert!(result.is_ok());
+            assert!(result.is_ok(), "{msg}");
             assert_eq!(
                 String::from_utf8(writer).unwrap(),
                 "client,available,held,total,locked\n1,5.0,0.0,5.0,false\n",
