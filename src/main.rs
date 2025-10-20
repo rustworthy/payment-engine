@@ -6,7 +6,8 @@ const USAGE_HINT: &str = r#"
 
 fn main() {
     // TODO: consider using `clap` if we are going to support
-    // extra arguments/flags
+    // extra arguments/flags (e.g. configurable custom separator in the csv file,
+    // or "invalid" transactions handling mode, i.e. whether to silently skip vs fail
     let mut args = std::env::args();
     let _binname = args.next();
     let Some(filename) = args.next() else {
@@ -21,7 +22,7 @@ fn main() {
     let reader = std::io::BufReader::new(file);
     let writer = std::io::BufWriter::new(std::io::stdout());
     if let Err(err) = payment_engine::process(reader, writer) {
-        println!("Processing error: {}", err);
+        eprintln!("Processing error: {}", err);
         std::process::exit(1);
     }
 }

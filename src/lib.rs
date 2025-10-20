@@ -16,13 +16,15 @@ use domain::{
 
 /// Process the records contained in the `reader` in CSV format.
 ///
-/// Note how there are no timestamps on the precessed records for us to be
+/// Note how there are no timestamps on the processed records for us to be
 /// able to establish the order. Instead, we expect the transactions to have been
 /// written to whatever we are now reading from (e.g. a file) respecting
 /// the chronological order.
 ///
 /// Whitespaces and decimal precisions are accepted. Internally, whitespaces
-/// get trimmed both in headers and in fields.
+/// get trimmed both in headers and in fields. As for the decimals, only the
+/// integer part and the first four places after the demial point are taken
+/// into account (pun intended).
 // TODO: once our trace-bullet implementation is ready, consider intoducing
 // our own enumerated error using `thiserror` and `anyhow`
 pub fn process<R, W>(reader: R, writer: W) -> Result<(), Box<dyn Error>>
@@ -266,7 +268,7 @@ mod tests {
                 "amount field is empty but preceeded by comma",
             ),
             // this case is also considered fine, since we are just ingoring
-            // the amount field for dipute resolution operations
+            // the amount field for dispute resolution operations
             (
                 "\
                     type,         client,  tx,     amount\n\
