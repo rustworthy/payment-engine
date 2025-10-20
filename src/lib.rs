@@ -106,6 +106,10 @@ where
                         let account = accounts
                             .get_mut(&record.client)
                             .expect("account to have been created earlier for this client");
+                        // available can temporarily become negative in this case
+                        // which we consider ok, since the `DisputeRecordKind::Resolve`
+                        // can restore the available funds and so we are not locking
+                        // their account (we do only in a change back occurs)
                         account.hold(txn.amount);
                         txn.state = TxnState::Disputed;
                     }
@@ -325,17 +329,80 @@ mod tests {
             "deposit,    1,       4,      0.00019",    // now should be sufficient
             "withdrawal, 1,       5,      15000.0001", // should empty the account
         ];
-        let mut writer = Vec::new();
-        let result = process(input.join("\n").as_bytes(), &mut writer);
-        assert!(result.is_ok());
-        let accounts = csv::Reader::from_reader(writer.as_slice())
-            .deserialize()
-            .collect::<Result<Vec<Account>, _>>()
-            .unwrap();
+        let accounts = &process_valid_input(input.join("\n").as_bytes());
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].total, Amount::try_from_f64(0.).unwrap());
         assert_eq!(accounts[0].available, Amount::try_from_f64(0.).unwrap());
         assert_eq!(accounts[0].held, Amount::try_from_f64(0.).unwrap());
         assert!(!accounts[0].locked);
+    }
+
+    #[test]
+    fn holds_amount_on_diputes() {
+        let input = [
+            "type,       client,  tx,     amount",
+            "dispute,    5,       10,            ", // txn 10 is not there (skip)
+            "deposit,    5,       11,      100.0",  // account is there and topped up ...
+            "withdrawal, 5,       12,      100.0",  // ... and immediately emptied
+            "dispute,    5,       11,            ", // txn gets disputed
+            "deposit,    5,       13,      5.5",    // we can still pop up ...
+            "withdrawal, 5,       14,      5.5",    // ... but cannot withdraw temporarily
+        ];
+        let accounts = &process_valid_input(input.join("\n").as_bytes());
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].client, 5);
+        assert_eq!(accounts[0].total, Amount::try_from_f64(5.5).unwrap());
+        // at the time we were depositing the account with 5.5, the available
+        // was already minus 100.0 due to the dispute
+        assert_eq!(accounts[0].available, Amount::try_from_f64(-94.5).unwrap());
+        assert_eq!(accounts[0].held, Amount::try_from_f64(100.).unwrap());
+        assert!(!accounts[0].locked);
+    }
+
+    #[test]
+    fn handles_disputes() {
+        // reminder: client identifier is u16 and tx - u32, so let's we can
+        // use their max values as well
+        let input = [
+            "type,       client,  tx,           amount",
+            "deposit,    65535,   4294967295,   100.0", // account is there and topped up ...
+            "dispute,    65535,   4294967295,        ", // and the top up gets disputed ...
+            "resolve,    65535,   4294967295,        ", // ... and resolved
+        ];
+        let account = &process_valid_input(input.join("\n").as_bytes())[0];
+        assert_eq!(account.client, u16::MAX);
+        assert_eq!(account.total, Amount::try_from_f64(100.0).unwrap());
+        assert_eq!(account.available, Amount::try_from_f64(100.0).unwrap());
+        assert_eq!(account.held, Amount::try_from_f64(0.).unwrap());
+        assert!(!account.locked);
+
+        // let's continue with the example from the `holds_amount_on_diputes` test
+        let input = [
+            "type,       client,  tx,     amount",
+            "dispute,    5,       10,            ", // txn 10 is not there (skip)
+            "deposit,    5,       11,      100.0 ", // account is there and topped up ...
+            "withdrawal, 5,       12,      100.0 ", // ... and immediately emptied
+            "dispute,    5,       11,            ", // txn gets disputed
+            "deposit,    5,       13,      5.5   ", // we can still pop up ...
+            "withdrawal, 5,       14,      5.5   ", // ... but cannot withdraw temporarily
+            "chargeback, 5,       11,            ", // and now the chargeback happens
+            "deposit,    5,       15,      100.0 ", // account is locked (skip)
+        ];
+        let account = &process_valid_input(input.join("\n").as_bytes())[0];
+        assert_eq!(account.client, 5);
+        assert_eq!(account.total, Amount::try_from_f64(-94.5).unwrap());
+        assert_eq!(account.available, Amount::try_from_f64(-94.5).unwrap());
+        assert_eq!(account.held, Amount::try_from_f64(0.).unwrap());
+        assert!(account.locked); // NB
+    }
+
+    fn process_valid_input(input: &[u8]) -> Vec<Account> {
+        let mut writer = Vec::new();
+        let result = process(input, &mut writer);
+        assert!(result.is_ok());
+        csv::Reader::from_reader(writer.as_slice())
+            .deserialize()
+            .collect::<Result<Vec<Account>, _>>()
+            .unwrap()
     }
 }
